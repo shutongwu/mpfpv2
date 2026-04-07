@@ -1,0 +1,13 @@
+# Binaries
+mpfpv-*
+*.exe
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

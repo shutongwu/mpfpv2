@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mpfpv</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Segoe UI', 'SF Pro', -apple-system, sans-serif;
+  background: #0d1117; color: #c9d1d9;
+  padding: 20px; max-width: 900px; margin: 0 auto;
+  font-size: 14px; line-height: 1.5;
+}
+h1 { font-size: 20px; margin-bottom: 16px; color: #58a6ff; }
+h2 { font-size: 16px; margin: 20px 0 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
+
+.card {
+  background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+  padding: 16px; margin-bottom: 16px;
+}
+.card-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+.card-item { flex: 1; min-width: 120px; }
+.card-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+.card-value { font-size: 16px; font-weight: 600; color: #e6edf3; margin-top: 2px; }
+
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 12px;
+  font-size: 12px; font-weight: 600;
+}
+.badge-green { background: #0d4429; color: #3fb950; }
+.badge-red { background: #4a1525; color: #f85149; }
+.badge-yellow { background: #3d2e00; color: #d29922; }
+.badge-blue { background: #0c2d6b; color: #58a6ff; }
+.badge-gray { background: #21262d; color: #8b949e; }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 8px 12px; border-bottom: 2px solid #30363d; color: #8b949e; font-size: 12px; text-transform: uppercase; }
+td { padding: 8px 12px; border-bottom: 1px solid #21262d; }
+tr:hover td { background: #1c2128; }
+tr.expanded td { background: #1c2128; border-bottom: none; }
+
+.detail-row td { background: #1c2128; padding: 4px 12px 12px 40px; }
+.detail-row table { margin-top: 4px; }
+.detail-row th { font-size: 11px; border-bottom: 1px solid #30363d; }
+.detail-row td { padding: 4px 8px; border-bottom: 1px solid #21262d; }
+
+button {
+  background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+  padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
+}
+button:hover { background: #30363d; border-color: #8b949e; }
+button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+button.danger { color: #f85149; }
+button.danger:hover { background: #4a1525; border-color: #f85149; }
+
+.btn-group { display: inline-flex; gap: 0; }
+.btn-group button { border-radius: 0; margin-left: -1px; }
+.btn-group button:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+.btn-group button:last-child { border-radius: 0 4px 4px 0; }
+
+.loading { color: #8b949e; font-style: italic; }
+.error-msg { color: #f85149; }
+.active-marker { color: #3fb950; font-weight: bold; }
+#mode-label { font-size: 12px; color: #8b949e; margin-left: 8px; }
+
+/* --- GUI-specific styles --- */
+.connect-bar {
+  display: flex; align-items: center; gap: 16px;
+  margin-bottom: 16px; padding: 16px;
+  background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+}
+.connect-btn {
+  padding: 10px 32px; font-size: 16px; font-weight: 600; border-radius: 6px;
+  min-width: 140px; text-align: center;
+}
+.connect-btn.connect {
+  background: #238636; border-color: #2ea043; color: #fff;
+}
+.connect-btn.connect:hover { background: #2ea043; }
+.connect-btn.disconnect {
+  background: #da3633; border-color: #f85149; color: #fff;
+}
+.connect-btn.disconnect:hover { background: #b62324; }
+.connect-btn:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
+.connect-status {
+  font-size: 14px; flex: 1;
+}
+
+.config-section {
+  margin-bottom: 16px;
+}
+.config-toggle {
+  cursor: pointer; user-select: none; color: #58a6ff; font-size: 14px;
+  display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+}
+.config-toggle:hover { text-decoration: underline; }
+.config-body { display: none; }
+.config-body.open { display: block; }
+
+.form-group {
+  margin-bottom: 12px;
+}
+.form-group label {
+  display: block; font-size: 12px; color: #8b949e; margin-bottom: 4px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.form-group input, .form-group select {
+  width: 100%; padding: 8px 10px; font-size: 14px;
+  background: #0d1117; color: #e6edf3;
+  border: 1px solid #30363d; border-radius: 4px;
+}
+.form-group input:focus, .form-group select:focus {
+  outline: none; border-color: #58a6ff;
+}
+.form-row { display: flex; gap: 16px; }
+.form-row .form-group { flex: 1; }
+
+.save-btn {
+  background: #1f6feb; border-color: #1f6feb; color: #fff;
+  padding: 8px 24px; font-size: 14px; font-weight: 600;
+}
+.save-btn:hover { background: #388bfd; }
+.save-msg {
+  display: inline-block; margin-left: 12px; font-size: 12px;
+}
+.save-msg.ok { color: #3fb950; }
+.save-msg.err { color: #f85149; }
+</style>
+</head>
+<body>
+
+<h1>mpfpv <span id="mode-label"></span></h1>
+<div id="app"><span class="loading">Detecting mode...</span></div>
+
+<script>
+(function() {
+  'use strict';
+
+  var mode = null;
+  var guiMode = false; // true when GUI controller APIs are available
+  var expandedClient = null;
+  var pollTimer = null;
+  var configOpen = false;
+  var serverConfigOpen = false;
+  var serverInitialized = false;
+  var serverHasConfigAPI = false;
+  var prevDeviceBytes = {}; // clientID -> {rx, tx, time}
+
+
+  function detectMode() {
+    // First, check if GUI controller is available.
+    fetch('/api/connection-status').then(function(res) {
+      if (res.ok) {
+        guiMode = true;
+        mode = 'client';
+        document.getElementById('mode-label').textContent = '(client)';
+        render();
+        startPolling();
+        return;
+      }
+      // Not GUI mode, fall back to normal detection.
+      detectNormalMode();
+    }).catch(function() {
+      detectNormalMode();
+    });
+  }
+
+  function detectNormalMode() {
+    fetch('/api/status').then(function(res) {
+      if (res.ok) { mode = 'client'; }
+      else { mode = 'server'; }
+      document.getElementById('mode-label').textContent = '(' + mode + ')';
+      render();
+      startPolling();
+    }).catch(function() {
+      mode = 'server';
+      document.getElementById('mode-label').textContent = '(server)';
+      render();
+      startPolling();
+    });
+  }
+
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(doRefresh, 2000);
+    doRefresh();
+  }
+
+  function doRefresh() {
+    if (mode === 'client') {
+      if (guiMode) refreshGUIClient();
+      else refreshClient();
+    } else {
+      refreshServer();
+    }
+  }
+
+  // --- GUI Client mode (with connect/disconnect/config) ---
+
+  function refreshGUIClient() {
+    Promise.all([
+      fetch('/api/status').then(function(r) { return r.json(); }),
+      fetch('/api/interfaces').then(function(r) { return r.json(); }),
+      fetch('/api/connection-status').then(function(r) { return r.json(); })
+    ]).then(function(results) {
+      renderGUIClient(results[0], results[1], results[2]);
+    }).catch(function(e) {
+      document.getElementById('app').innerHTML = '<p class="error-msg">Failed to fetch status: ' + esc(e.message) + '</p>';
+    });
+  }
+
+  var guiInitialized = false;
+
+  function renderGUIClient(status, ifaces, connStatus) {
+    var isConn = connStatus.connected;
+
+    // First render: build the full layout with stable DOM IDs
+    if (!guiInitialized) {
+      var html = '';
+      html += '<div id="gui-connect-bar"></div>';
+      html += '<div class="config-section">';
+      html += '<div class="config-toggle" onclick="mpfpv.toggleConfig()">';
+      html += '&#9654; Configuration</div>';
+      html += '<div class="config-body" id="config-body">';
+      html += renderConfigForm();
+      html += '</div></div>';
+      html += '<div id="gui-status-area"></div>';
+      document.getElementById('app').innerHTML = html;
+      guiInitialized = true;
+      loadConfigValues();
+    }
+
+    // Update connect bar (never touches config form)
+    var barHtml = '<div class="connect-bar">';
+    if (isConn) {
+      barHtml += '<button class="connect-btn disconnect" onclick="mpfpv.disconnect()">Disconnect</button>';
+      barHtml += '<div class="connect-status">';
+      if (status.connected) {
+        barHtml += '<span class="badge badge-green">Connected</span>';
+        barHtml += ' &nbsp; Virtual IP: <strong>' + esc(status.virtualIP || '-') + '</strong>';
+        barHtml += ' &nbsp; Client ID: <strong>' + status.clientID + '</strong>';
+      } else {
+        barHtml += '<span class="badge badge-yellow">Connecting...</span>';
+      }
+      barHtml += '</div>';
+    } else {
+      barHtml += '<button class="connect-btn connect" onclick="mpfpv.connect()">Connect</button>';
+      barHtml += '<div class="connect-status">';
+      barHtml += '<span class="badge badge-gray">Disconnected</span>';
+      if (connStatus.error) {
+        barHtml += ' <span class="error-msg">' + esc(connStatus.error) + '</span>';
+      }
+      barHtml += '</div>';
+    }
+    barHtml += '</div>';
+    document.getElementById('gui-connect-bar').innerHTML = barHtml;
+
+    // Update status area (only when connected)
+    var statusHtml = '';
+    if (isConn) {
+      statusHtml += '<div class="card"><div class="card-row">';
+      statusHtml += '<div class="card-item"><div class="card-label">Send Mode</div><div class="card-value">';
+      statusHtml += '<div class="btn-group">';
+      statusHtml += '<button class="' + (status.sendMode === 'redundant' ? 'active' : '') + '" onclick="mpfpv.setSendMode(\'redundant\')">Redundant</button>';
+      statusHtml += '<button class="' + (status.sendMode === 'failover' ? 'active' : '') + '" onclick="mpfpv.setSendMode(\'failover\')">Failover</button>';
+      statusHtml += '</div></div></div></div></div>';
+
+      statusHtml += '<h2>Interfaces</h2>';
+      if (!ifaces || ifaces.length === 0) {
+        statusHtml += '<div class="card"><span class="loading">No interfaces (single socket mode)</span></div>';
+      } else {
+        statusHtml += '<div class="card"><table><thead><tr>';
+        statusHtml += '<th>Name</th><th>Local IP</th><th>Status</th><th>RTT</th><th>Recycles</th><th>Active</th><th></th>';
+        statusHtml += '</tr></thead><tbody>';
+        for (var i = 0; i < ifaces.length; i++) {
+          var iface = ifaces[i];
+          var statusBadge = iface.status === 'active'
+            ? '<span class="badge badge-green">active</span>'
+            : iface.status === 'suspect'
+              ? '<span class="badge badge-yellow">suspect</span>'
+              : '<span class="badge badge-red">down</span>';
+          var activeMark = iface.isActive ? '<span class="active-marker">&#9679;</span>' : '';
+          var recycleStr = (iface.recycleCount || 0) > 0
+            ? '<span class="badge badge-yellow">' + iface.recycleCount + '</span>'
+            : '0';
+          statusHtml += '<tr>';
+          statusHtml += '<td>' + esc(iface.name) + '</td>';
+          statusHtml += '<td>' + esc(iface.localIP) + '</td>';
+          statusHtml += '<td>' + statusBadge + '</td>';
+          statusHtml += '<td>' + esc(iface.rtt) + '</td>';
+          statusHtml += '<td>' + recycleStr + '</td>';
+          statusHtml += '<td>' + activeMark + '</td>';
+          statusHtml += '<td><button onclick="mpfpv.toggleIface(\'' + esc(iface.name) + '\')">Toggle</button></td>';
+          statusHtml += '</tr>';
+        }
+        statusHtml += '</tbody></table></div>';
+      }
+    }
+    document.getElementById('gui-status-area').innerHTML = statusHtml;
+  }
+
+  function renderConfigForm() {
+    var html = '<div class="card">';
+    html += '<div class="form-row">';
+    html += '<div class="form-group"><label>Server Address</label>';
+    html += '<input type="text" id="cfg-server" placeholder="203.0.113.1:9800"></div>';
+    html += '<div class="form-group"><label>Team Key</label>';
+    html += '<input type="text" id="cfg-teamkey" placeholder="my-team-key"></div>';
+    html += '</div>';
+    html += '<div class="form-group"><label>Network Adapter</label>';
+    html += '<select id="cfg-iface"><option value="">Loading...</option></select></div>';
+    html += '<div style="margin-top:8px">';
+    html += '<button class="save-btn" onclick="mpfpv.saveConfig()">Save</button>';
+    html += '<span class="save-msg" id="save-msg"></span>';
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  var cachedConfig = null;
+
+  function loadConfigValues() {
+    // Load available network adapters
+    fetch('/api/available-interfaces').then(function(r) { return r.json(); }).then(function(ifaces) {
+      var sel = document.getElementById('cfg-iface');
+      if (!sel) return;
+      var savedBind = (cachedConfig && cachedConfig.client && cachedConfig.client.bindInterface) || '';
+      sel.innerHTML = '';
+      for (var i = 0; i < ifaces.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = ifaces[i].name;
+        opt.textContent = ifaces[i].name + ' (' + ifaces[i].addrs.join(', ') + ')';
+        if (ifaces[i].name === savedBind) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    }).catch(function() {});
+
+    if (cachedConfig) {
+      applyConfigToForm(cachedConfig);
+      return;
+    }
+    fetch('/api/config').then(function(r) { return r.json(); }).then(function(cfg) {
+      cachedConfig = cfg;
+      applyConfigToForm(cfg);
+    }).catch(function() {});
+  }
+
+  function applyConfigToForm(cfg) {
+    var el;
+    el = document.getElementById('cfg-server');
+    if (el && !el._userEdited) el.value = (cfg.client && cfg.client.serverAddr) || '';
+    el = document.getElementById('cfg-teamkey');
+    if (el && !el._userEdited) el.value = cfg.teamKey || '';
+
+    // Mark inputs so we don't overwrite user edits on refresh.
+    var inputs = document.querySelectorAll('#config-body input');
+    for (var i = 0; i < inputs.length; i++) {
+      inputs[i].addEventListener('input', function() { this._userEdited = true; });
+    }
+  }
+
+  // --- Normal client mode (no GUI controller) ---
+
+  function refreshClient() {
+    Promise.all([
+      fetch('/api/status').then(function(r) { return r.json(); }),
+      fetch('/api/interfaces').then(function(r) { return r.json(); })
+    ]).then(function(results) {
+      renderClient(results[0], results[1]);
+    }).catch(function(e) {
+      document.getElementById('app').innerHTML = '<p class="error-msg">Failed to fetch status: ' + esc(e.message) + '</p>';
+    });
+  }
+
+  function renderClient(status, ifaces) {
+    var connBadge = status.connected
+      ? '<span class="badge badge-green">Connected</span>'
+      : '<span class="badge badge-red">Disconnected</span>';
+
+    var html = '<div class="card">';
+    html += '<div class="card-row">';
+    html += '<div class="card-item"><div class="card-label">Status</div><div class="card-value">' + connBadge + '</div></div>';
+    html += '<div class="card-item"><div class="card-label">Virtual IP</div><div class="card-value">' + esc(status.virtualIP || '-') + '</div></div>';
+    html += '<div class="card-item"><div class="card-label">Client ID</div><div class="card-value">' + status.clientID + '</div></div>';
+    html += '</div>';
+    html += '<div class="card-row">';
+    html += '<div class="card-item"><div class="card-label">Send Mode</div><div class="card-value">';
+    html += '<div class="btn-group">';
+    html += '<button class="' + (status.sendMode === 'redundant' ? 'active' : '') + '" onclick="mpfpv.setSendMode(\'redundant\')">Redundant</button>';
+    html += '<button class="' + (status.sendMode === 'failover' ? 'active' : '') + '" onclick="mpfpv.setSendMode(\'failover\')">Failover</button>';
+    html += '</div></div></div>';
+    html += '</div></div>';
+
+    html += '<h2>Interfaces</h2>';
+    if (!ifaces || ifaces.length === 0) {
+      html += '<div class="card"><span class="loading">No interfaces (single socket mode)</span></div>';
+    } else {
+      html += '<div class="card"><table><thead><tr>';
+      html += '<th>Name</th><th>Local IP</th><th>Status</th><th>RTT</th><th>Recycles</th><th>Active</th><th></th>';
+      html += '</tr></thead><tbody>';
+      for (var i = 0; i < ifaces.length; i++) {
+        var iface = ifaces[i];
+        var statusBadge = iface.status === 'active'
+          ? '<span class="badge badge-green">active</span>'
+          : iface.status === 'suspect'
+            ? '<span class="badge badge-yellow">suspect</span>'
+            : '<span class="badge badge-red">down</span>';
+        var activeMark = iface.isActive ? '<span class="active-marker">&#9679;</span>' : '';
+        var recycleStr = (iface.recycleCount || 0) > 0
+          ? '<span class="badge badge-yellow">' + iface.recycleCount + '</span>'
+          : '0';
+        html += '<tr>';
+        html += '<td>' + esc(iface.name) + '</td>';
+        html += '<td>' + esc(iface.localIP) + '</td>';
+        html += '<td>' + statusBadge + '</td>';
+        html += '<td>' + esc(iface.rtt) + '</td>';
+        html += '<td>' + recycleStr + '</td>';
+        html += '<td>' + activeMark + '</td>';
+        html += '<td><button onclick="mpfpv.toggleIface(\'' + esc(iface.name) + '\')">Toggle</button></td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table></div>';
+    }
+
+    document.getElementById('app').innerHTML = html;
+  }
+
+  // --- Server mode ---
+
+  function refreshServer() {
+    // On first refresh, probe for server-config API availability.
+    if (!serverInitialized) {
+      fetch('/api/server-config').then(function(r) {
+        if (r.ok) {
+          serverHasConfigAPI = true;
+          return r.json();
+        }
+        return null;
+      }).then(function(cfg) {
+        if (cfg) {
+          applyServerConfigToForm(cfg);
+        }
+      }).catch(function() {});
+    }
+
+    Promise.all([
+      fetch('/api/devices').then(function(r) { return r.json(); }),
+      fetch('/api/stats').then(function(r) { return r.json(); }).catch(function() { return null; })
+    ]).then(function(results) {
+      renderServer(results[0], results[1]);
+    }).catch(function(e) {
+      document.getElementById('app').innerHTML = '<p class="error-msg">Failed to fetch data: ' + esc(e.message) + '</p>';
+    });
+  }
+
+  function renderServerConfigForm() {
+    var html = '<div class="card">';
+    html += '<div class="form-row">';
+    html += '<div class="form-group"><label>Team Key</label>';
+    html += '<input type="text" id="srv-teamkey" placeholder="my-team-key"></div>';
+    html += '<div class="form-group"><label>Listen Address</label>';
+    html += '<input type="text" id="srv-port" placeholder="0.0.0.0:9800"></div>';
+    html += '</div>';
+    html += '<div style="margin-top:8px">';
+    html += '<button class="save-btn" onclick="mpfpv.saveServerConfig()">Save</button>';
+    html += '<span class="save-msg" id="srv-save-msg"></span>';
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  function applyServerConfigToForm(cfg) {
+    var el;
+    el = document.getElementById('srv-teamkey');
+    if (el && !el._userEdited) el.value = cfg.teamKey || '';
+    el = document.getElementById('srv-port');
+    if (el && !el._userEdited) el.value = cfg.listenAddr || '';
+
+    // Mark inputs so we don't overwrite user edits on refresh.
+    var inputs = document.querySelectorAll('#server-config-body input');
+    for (var i = 0; i < inputs.length; i++) {
+      inputs[i].addEventListener('input', function() { this._userEdited = true; });
+    }
+  }
+
+  var prevStats = null;
+
+  function renderServer(devices, stats) {
+    // First render: build stable DOM layout
+    if (!serverInitialized) {
+      var layoutHtml = '';
+      if (serverHasConfigAPI) {
+        layoutHtml += '<div class="config-section">';
+        layoutHtml += '<div class="config-toggle" onclick="mpfpv.toggleServerConfig()">';
+        layoutHtml += '&#9654; Server Configuration</div>';
+        layoutHtml += '<div class="config-body" id="server-config-body">';
+        layoutHtml += renderServerConfigForm();
+        layoutHtml += '</div></div>';
+      }
+      layoutHtml += '<div class="card" id="conn-string-card" style="margin-top:16px">';
+      layoutHtml += '<div class="card-label">CONNECTION STRING (copy to client)</div>';
+      layoutHtml += '<div style="display:flex;gap:8px;margin-top:6px">';
+      layoutHtml += '<input id="conn-str" readonly style="flex:1;background:#0d1117;color:#58a6ff;border:1px solid #30363d;padding:6px 10px;border-radius:4px;font-family:monospace;font-size:13px">';
+      layoutHtml += '<button onclick="navigator.clipboard.writeText(document.getElementById(\'conn-str\').value).then(function(){alert(\'Copied!\')})">Copy</button>';
+      layoutHtml += '</div></div>';
+      layoutHtml += '<div id="srv-data-area"></div>';
+      document.getElementById('app').innerHTML = layoutHtml;
+      serverInitialized = true;
+
+      // Load connection string.
+      fetch('/api/connection-string').then(function(r) { return r.json(); }).then(function(d) {
+        var el = document.getElementById('conn-str');
+        if (el && d && d.connectionString) el.value = d.connectionString;
+      }).catch(function() {});
+
+      if (serverHasConfigAPI) {
+        // Re-load config values into the now-created form
+        fetch('/api/server-config').then(function(r) {
+          if (r.ok) return r.json();
+          return null;
+        }).then(function(cfg) {
+          if (cfg) applyServerConfigToForm(cfg);
+        }).catch(function() {});
+      }
+    }
+
+    var html = '';
+
+    // Server overview card
+    if (stats) {
+      var srvBw = '';
+      var nowS = Date.now();
+      if (prevStats) {
+        var dtS = (nowS - prevStats.time) / 1000;
+        if (dtS > 0.5) {
+          var rxR = (stats.rxBytes - prevStats.rx) * 8 / dtS;
+          var txR = (stats.txBytes - prevStats.tx) * 8 / dtS;
+          srvBw = '<span style="color:#3fb950">&uarr; ' + formatBits(rxR) + '</span> &nbsp; '
+                + '<span style="color:#58a6ff">&darr; ' + formatBits(txR) + '</span>';
+        }
+      }
+      prevStats = {rx: stats.rxBytes, tx: stats.txBytes, time: nowS};
+      html += '<div class="card"><div class="card-row">';
+      html += '<div class="card-item"><div class="card-label">Devices</div><div class="card-value">' + stats.onlineCount + ' / ' + stats.deviceCount + ' online</div></div>';
+      html += '<div class="card-item"><div class="card-label">Server Bandwidth</div><div class="card-value">' + (srvBw || '<span class="loading">calculating...</span>') + '</div></div>';
+      html += '</div></div>';
+    }
+
+    // Devices section — card per device
+    html += '<h2>Devices</h2>';
+    if (!devices || devices.length === 0) {
+      html += '<div class="card"><span class="loading">No registered devices</span></div>';
+    }
+    for (var i = 0; i < devices.length; i++) {
+      var d = devices[i];
+      var statusBadge = d.online
+        ? '<span class="badge badge-green">online</span>'
+        : '<span class="badge badge-gray">offline</span>';
+      var inputId = 'dev-ip-' + d.clientID;
+
+      html += '<div class="card">';
+      // Header row: name, IP, status, actions
+      html += '<div class="card-row">';
+      html += '<div class="card-item"><div class="card-label">Device</div><div class="card-value">' + esc(d.deviceName || 'ID:' + d.clientID) + '</div></div>';
+      html += '<div class="card-item"><div class="card-label">Virtual IP</div><div class="card-value"><input type="text" id="' + inputId + '" value="' + esc(d.virtualIP) + '" style="width:120px;padding:2px 6px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:3px;font-size:14px;"></div></div>';
+      html += '<div class="card-item"><div class="card-label">Status</div><div class="card-value">' + statusBadge + '</div></div>';
+      if (d.sendMode) {
+        html += '<div class="card-item"><div class="card-label">Mode</div><div class="card-value"><span class="badge badge-blue">' + esc(d.sendMode) + '</span></div></div>';
+      }
+      html += '<div class="card-item"><div class="card-label">Last Seen</div><div class="card-value">' + formatTime(d.lastSeen) + '</div></div>';
+      html += '<div class="card-item" style="text-align:right"><div class="card-label">&nbsp;</div><div class="card-value">';
+      html += '<button onclick="mpfpv.saveDeviceIP(' + d.clientID + ', \'' + inputId + '\')">Save</button> ';
+      html += '<button class="danger" onclick="mpfpv.deleteDevice(' + d.clientID + ', \'' + esc(d.deviceName || '') + '\')">Remove</button>';
+      html += '</div></div>';
+      html += '</div>';
+
+      // Per-NIC details
+      if (d.pathRTTs && d.pathRTTs.length > 0) {
+        html += '<table style="margin-top:8px"><thead><tr>';
+        html += '<th>NIC</th><th>RTT</th><th>Upload (TX)</th><th>Download (RX)</th>';
+        html += '</tr></thead><tbody>';
+        for (var j = 0; j < d.pathRTTs.length; j++) {
+          var p = d.pathRTTs[j];
+          var nicKey = d.clientID + ':' + p.name;
+          var nowMs = Date.now();
+          var prevNic = prevDeviceBytes[nicKey];
+          var txBw = '-', rxBw = '-';
+          if (prevNic) {
+            var dtNic = (nowMs - prevNic.time) / 1000;
+            if (dtNic > 0.5) {
+              var txD = p.txBytes - prevNic.tx;
+              var rxD = p.rxBytes - prevNic.rx;
+              if (txD > 0 && txD < 0xFFFFFFFF) txBw = formatBits(txD * 8 / dtNic);
+              if (rxD > 0 && rxD < 0xFFFFFFFF) rxBw = formatBits(rxD * 8 / dtNic);
+            }
+          }
+          prevDeviceBytes[nicKey] = {tx: p.txBytes, rx: p.rxBytes, time: nowMs};
+          var rttBadge = p.rttMs > 0
+            ? (p.rttMs < 50 ? '<span class="badge badge-green">' + p.rttMs + 'ms</span>'
+              : p.rttMs < 100 ? '<span class="badge badge-yellow">' + p.rttMs + 'ms</span>'
+              : '<span class="badge badge-red">' + p.rttMs + 'ms</span>')
+            : '<span class="badge badge-gray">-</span>';
+          html += '<tr>';
+          html += '<td>' + esc(p.name) + '</td>';
+          html += '<td>' + rttBadge + '</td>';
+          html += '<td style="color:#3fb950">' + txBw + '</td>';
+          html += '<td style="color:#58a6ff">' + rxBw + '</td>';
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+      }
+
+      // Server-side total bandwidth
+      if (d.online) {
+        var totalBw = '';
+        var nowT = Date.now();
+        var prevT = prevDeviceBytes['total:' + d.clientID];
+        if (prevT && (d.rxBytes > 0 || d.txBytes > 0)) {
+          var dtT = (nowT - prevT.time) / 1000;
+          if (dtT > 0.5) {
+            var rxR = (d.rxBytes - prevT.rx) * 8 / dtT;
+            var txR = (d.txBytes - prevT.tx) * 8 / dtT;
+            if (rxR >= 0 && txR >= 0) {
+              totalBw = '<div style="margin-top:8px;font-size:12px;color:#8b949e">'
+                + 'Server total: <span style="color:#3fb950">&uarr;' + formatBits(rxR) + '</span> '
+                + '<span style="color:#58a6ff">&darr;' + formatBits(txR) + '</span></div>';
+            }
+          }
+        }
+        prevDeviceBytes['total:' + d.clientID] = {rx: d.rxBytes, tx: d.txBytes, time: nowT};
+        html += totalBw;
+      }
+
+      html += '</div>';
+    }
+
+    document.getElementById('srv-data-area').innerHTML = html;
+
+    if (expandedClient !== null) {
+      loadClientDetail(expandedClient);
+    }
+  }
+
+  function loadClientDetail(id) {
+    var el = document.getElementById('detail-' + id);
+    if (!el) return;
+    fetch('/api/clients/' + id).then(function(res) {
+      if (!res.ok) { el.innerHTML = '<span class="error-msg">Not found</span>'; return; }
+      return res.json();
+    }).then(function(detail) {
+      if (!detail) return;
+      var h = '<strong>Source Addresses</strong>';
+      if (!detail.addrs || detail.addrs.length === 0) {
+        h += '<p class="loading">No addresses</p>';
+      } else {
+        h += '<table><thead><tr><th>Address</th><th>Last Seen</th></tr></thead><tbody>';
+        for (var k = 0; k < detail.addrs.length; k++) {
+          var a = detail.addrs[k];
+          h += '<tr><td>' + esc(a.addr) + '</td><td>' + formatTime(a.lastSeen) + '</td></tr>';
+        }
+        h += '</tbody></table>';
+      }
+      el.innerHTML = h;
+    }).catch(function(e) {
+      el.innerHTML = '<span class="error-msg">Error: ' + esc(e.message) + '</span>';
+    });
+  }
+
+  // --- Exposed actions ---
+  window.mpfpv = {
+    setSendMode: function(m) {
+      fetch('/api/sendmode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: m })
+      }).then(function() { doRefresh(); }).catch(function(e) { alert('Failed: ' + e.message); });
+    },
+    toggleIface: function(name) {
+      fetch('/api/interfaces/' + encodeURIComponent(name) + '/disable', { method: 'POST' })
+        .then(function(res) {
+          if (!res.ok) return fetch('/api/interfaces/' + encodeURIComponent(name) + '/enable', { method: 'POST' });
+        })
+        .then(function() { doRefresh(); })
+        .catch(function(e) { alert('Failed: ' + e.message); });
+    },
+    toggleClient: function(id) {
+      expandedClient = expandedClient === id ? null : id;
+      doRefresh();
+    },
+    deleteClient: function(id) {
+      if (!confirm('Delete client ' + id + '? This will release its IP allocation.')) return;
+      fetch('/api/clients/' + id, { method: 'DELETE' })
+        .then(function() { if (expandedClient === id) expandedClient = null; doRefresh(); })
+        .catch(function(e) { alert('Failed: ' + e.message); });
+    },
+    deleteDevice: function(clientID, name) {
+      var label = name ? name + ' (' + clientID + ')' : 'ID:' + clientID;
+      if (!confirm('Remove device ' + label + '?\nIt will get a new IP on next connection.')) return;
+      fetch('/api/devices/' + clientID, { method: 'DELETE' })
+        .then(function(res) {
+          if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+          doRefresh();
+        })
+        .catch(function(e) { alert('Failed: ' + e.message); });
+    },
+    saveDeviceIP: function(clientID, inputId) {
+      var input = document.getElementById(inputId);
+      if (!input) return;
+      var newIP = input.value.trim();
+      if (!newIP) { alert('IP cannot be empty'); return; }
+      fetch('/api/devices/' + clientID, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ virtualIP: newIP })
+      }).then(function(res) {
+        if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+        input.style.borderColor = '#3fb950';
+        setTimeout(function() { input.style.borderColor = '#30363d'; }, 2000);
+        doRefresh();
+      }).catch(function(e) {
+        input.style.borderColor = '#f85149';
+        alert('Failed: ' + e.message);
+      });
+    },
+
+    // --- GUI-specific actions ---
+    connect: function() {
+      fetch('/api/connect', { method: 'POST' })
+        .then(function(res) {
+          if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+          doRefresh();
+        })
+        .catch(function(e) { alert('Connect failed: ' + e.message); });
+    },
+    disconnect: function() {
+      fetch('/api/disconnect', { method: 'POST' })
+        .then(function(res) {
+          if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+          doRefresh();
+        })
+        .catch(function(e) { alert('Disconnect failed: ' + e.message); });
+    },
+    toggleConfig: function() {
+      configOpen = !configOpen;
+      var body = document.getElementById('config-body');
+      var toggle = body ? body.previousElementSibling : null;
+      if (body) {
+        body.className = configOpen ? 'config-body open' : 'config-body';
+      }
+      if (toggle) {
+        toggle.innerHTML = (configOpen ? '&#9660;' : '&#9654;') + ' Configuration';
+      }
+      if (configOpen && !cachedConfig) {
+        loadConfigValues();
+      }
+    },
+    toggleServerConfig: function() {
+      serverConfigOpen = !serverConfigOpen;
+      var body = document.getElementById('server-config-body');
+      var toggle = body ? body.previousElementSibling : null;
+      if (body) {
+        body.className = serverConfigOpen ? 'config-body open' : 'config-body';
+      }
+      if (toggle) {
+        toggle.innerHTML = (serverConfigOpen ? '&#9660;' : '&#9654;') + ' Server Configuration';
+      }
+    },
+    saveServerConfig: function() {
+      var teamKey = document.getElementById('srv-teamkey').value.trim();
+      var listenAddr = document.getElementById('srv-port').value.trim();
+      var msgEl = document.getElementById('srv-save-msg');
+
+      fetch('/api/server-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamKey: teamKey, listenAddr: listenAddr })
+      }).then(function(res) {
+        if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+        return res.json();
+      }).then(function() {
+        // Check if listenAddr changed from the original value.
+        var note = '';
+        fetch('/api/server-config').then(function(r) { return r.json(); }).then(function(cfg) {
+          // listenAddr is already saved, just inform user.
+          if (msgEl) {
+            msgEl.textContent = 'Saved! Listen address change requires restart.';
+            msgEl.className = 'save-msg ok';
+          }
+          // Clear user-edited flags.
+          var inputs = document.querySelectorAll('#server-config-body input');
+          for (var i = 0; i < inputs.length; i++) { inputs[i]._userEdited = false; }
+          setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 5000);
+        }).catch(function() {});
+      }).catch(function(e) {
+        if (msgEl) { msgEl.textContent = 'Error: ' + e.message; msgEl.className = 'save-msg err'; }
+      });
+    },
+    saveConfig: function() {
+      var serverAddr = document.getElementById('cfg-server').value.trim();
+      var teamKey = document.getElementById('cfg-teamkey').value.trim();
+      var bindIface = document.getElementById('cfg-iface').value;
+      var cfg = {
+        mode: 'client',
+        teamKey: teamKey,
+        client: {
+          clientID: 0,
+          serverAddr: serverAddr,
+          sendMode: 'redundant',
+          bindInterface: bindIface,
+          mtu: 1400,
+          dedupWindow: 4096,
+          excludedInterfaces: ['lo']
+        }
+      };
+
+      var msgEl = document.getElementById('save-msg');
+      fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg)
+      }).then(function(res) {
+        if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+        return res.json();
+      }).then(function() {
+        if (msgEl) { msgEl.textContent = 'Saved!'; msgEl.className = 'save-msg ok'; }
+        cachedConfig = cfg;
+        // Clear user-edited flags so next refresh fills values from saved config.
+        var inputs = document.querySelectorAll('#config-body input, #config-body select');
+        for (var i = 0; i < inputs.length; i++) { inputs[i]._userEdited = false; }
+        setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 3000);
+      }).catch(function(e) {
+        if (msgEl) { msgEl.textContent = 'Error: ' + e.message; msgEl.className = 'save-msg err'; }
+      });
+    }
+  };
+
+  // --- Helpers ---
+  function esc(s) {
+    if (s == null) return '';
+    var d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+
+  function formatBits(bps) {
+    if (bps < 1000) return Math.round(bps) + ' bps';
+    if (bps < 1000000) return (bps / 1000).toFixed(1) + ' kbps';
+    return (bps / 1000000).toFixed(2) + ' Mbps';
+  }
+
+  function formatTime(iso) {
+    if (!iso) return '-';
+    try {
+      var d = new Date(iso);
+      var now = new Date();
+      var diff = Math.floor((now - d) / 1000);
+      if (diff < 5) return 'just now';
+      if (diff < 60) return diff + 's ago';
+      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+      return d.toLocaleTimeString();
+    } catch (e) { return iso; }
+  }
+
+  function render() {
+    document.getElementById('app').innerHTML = '<span class="loading">Loading...</span>';
+  }
+
+  detectMode();
+})();
+</script>
+</body>
+</html>
