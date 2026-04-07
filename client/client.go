@@ -556,3 +556,17 @@ func recalcIPv4Checksum(ipHeader []byte) {
 	ipHeader[10] = byte(cs >> 8)
 	ipHeader[11] = byte(cs)
 }
+
+// WaitRegistered blocks until the client registers with the server.
+func (c *Client) WaitRegistered() {
+	<-c.tunReady
+}
+
+// VirtualIP returns the assigned virtual IP as a string.
+func (c *Client) VirtualIP() string {
+	vip := c.virtualIP.Load().(net.IP)
+	if vip == nil {
+		return ""
+	}
+	return vip.String()
+}
