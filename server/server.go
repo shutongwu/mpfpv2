@@ -153,9 +153,10 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("server: listen: %w", err)
 	}
-	// Minimize buffers for FPV low-latency: drop stale packets rather than queue.
-	conn.SetReadBuffer(65536)  // 64KB ≈ 45 pkts — server handles many clients
-	conn.SetWriteBuffer(65536)
+	// FPV low-latency: smaller than default but enough for multi-client bursts.
+	// Write deadline on sendToClient prevents head-of-line blocking.
+	conn.SetReadBuffer(262144)  // 256KB — server receives from many clients
+	conn.SetWriteBuffer(262144) // 256KB — server forwards to many destinations
 	s.conn = conn
 	defer conn.Close()
 
@@ -529,6 +530,9 @@ func (s *Server) sendToClient(clientID uint16, rawPacket []byte) {
 	pktLen := uint64(len(rawPacket))
 
 	for _, addr := range addrs {
+		// 5ms write deadline: drop rather than block the recv loop.
+		// One slow client must not stall forwarding for all others.
+		s.conn.SetWriteDeadline(time.Now().Add(5 * time.Millisecond))
 		if _, err := s.conn.WriteToUDP(rawPacket, addr); err != nil {
 			if log.IsLevelEnabled(log.DebugLevel) {
 				log.Debugf("server: write to %s for clientID=%d: %v", addr, clientID, err)
@@ -559,6 +563,7 @@ func (s *Server) sendHeartbeatAck(to *net.UDPAddr, clientID uint16, assignedIP n
 	})
 
 	if s.conn != nil {
+		s.conn.SetWriteDeadline(time.Now().Add(5 * time.Millisecond))
 		if _, err := s.conn.WriteToUDP(buf, to); err != nil {
 			log.Warnf("server: send ack to %s: %v", to, err)
 		}
