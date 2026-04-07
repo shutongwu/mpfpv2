@@ -264,25 +264,32 @@ func registerRoutes(mux *http.ServeMux, s *Server, teamKey, listenAddr string) {
 // ---------- Data gathering ----------
 
 func getClients(s *Server) []clientInfoResp {
-	s.sessionsLock.RLock()
-	defer s.sessionsLock.RUnlock()
+	// Snapshot session data under lock, format outside.
+	type snapshot struct {
+		id         uint16
+		vip        net.IP
+		name       string
+		lastSeen   time.Time
+		addrCount  int
+		rx, tx     uint64
+		pathRTTs   []pathRTTResp
+	}
 
-	now := time.Now()
-	result := make([]clientInfoResp, 0, len(s.sessions))
+	s.sessionsLock.RLock()
+	snaps := make([]snapshot, 0, len(s.sessions))
 	for _, sess := range s.sessions {
-		ci := clientInfoResp{
-			ClientID:   sess.ClientID,
-			VirtualIP:  sess.VirtualIP.String(),
-			DeviceName: sess.DeviceName,
-			Online:     now.Sub(sess.LastSeen) < s.clientTimeout,
-			AddrCount:  len(sess.Addrs),
-			RxBytes:    atomic.LoadUint64(&sess.RxBytes),
-			TxBytes:    atomic.LoadUint64(&sess.TxBytes),
-			LastSeen:   sess.LastSeen.Format(time.RFC3339),
+		sn := snapshot{
+			id:        sess.ClientID,
+			vip:       sess.VirtualIP,
+			name:      sess.DeviceName,
+			lastSeen:  sess.LastSeen,
+			addrCount: len(sess.Addrs),
+			rx:        atomic.LoadUint64(&sess.RxBytes),
+			tx:        atomic.LoadUint64(&sess.TxBytes),
 		}
 		for _, ai := range sess.Addrs {
 			if ai.NICName != "" {
-				ci.PathRTTs = append(ci.PathRTTs, pathRTTResp{
+				sn.pathRTTs = append(sn.pathRTTs, pathRTTResp{
 					Name:    ai.NICName,
 					RTTms:   int(ai.NICRTTms),
 					TxBytes: ai.NICTxBytes,
@@ -290,7 +297,25 @@ func getClients(s *Server) []clientInfoResp {
 				})
 			}
 		}
-		result = append(result, ci)
+		snaps = append(snaps, sn)
+	}
+	s.sessionsLock.RUnlock()
+
+	// Format + sort outside lock.
+	now := time.Now()
+	result := make([]clientInfoResp, len(snaps))
+	for i, sn := range snaps {
+		result[i] = clientInfoResp{
+			ClientID:   sn.id,
+			VirtualIP:  sn.vip.String(),
+			DeviceName: sn.name,
+			Online:     now.Sub(sn.lastSeen) < s.clientTimeout,
+			AddrCount:  sn.addrCount,
+			RxBytes:    sn.rx,
+			TxBytes:    sn.tx,
+			LastSeen:   sn.lastSeen.Format(time.RFC3339),
+			PathRTTs:   sn.pathRTTs,
+		}
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].ClientID < result[j].ClientID

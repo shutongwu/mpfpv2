@@ -227,7 +227,8 @@ func (m *MultiPath) SendAllHeartbeat(baseBuf []byte) error {
 		// Append: \x00 [nameLen] [name] [rtt 2B] [tx 4B] [rx 4B]
 		nameBytes := []byte(p.IfaceName)
 		suffixLen := 1 + 1 + len(nameBytes) + 2 + 4 + 4
-		pkt := make([]byte, len(baseBuf)+suffixLen)
+		pktLen := len(baseBuf) + suffixLen
+		pkt := protocol.GetBuf(pktLen)
 		copy(pkt, baseBuf)
 
 		off := len(baseBuf)
@@ -249,16 +250,17 @@ func (m *MultiPath) SendAllHeartbeat(baseBuf []byte) error {
 		pkt[off+2] = byte(rxBytes >> 8)
 		pkt[off+3] = byte(rxBytes)
 
-		if _, err := p.Conn.WriteToUDP(pkt, m.serverAddr); err != nil {
+		if _, err := p.Conn.WriteToUDP(pkt[:pktLen], m.serverAddr); err != nil {
 			p.mu.Lock()
 			p.Status = PathSuspect
 			p.mu.Unlock()
 			lastErr = err
 		} else {
 			p.mu.Lock()
-			p.TxBytes += uint64(len(pkt))
+			p.TxBytes += uint64(pktLen)
 			p.mu.Unlock()
 		}
+		protocol.PutBuf(pkt)
 	}
 	return lastErr
 }

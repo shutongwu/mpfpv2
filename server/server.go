@@ -533,15 +533,7 @@ func (s *Server) sendToClient(clientID uint16, rawPacket []byte) {
 			continue
 		}
 		atomic.AddUint64(&s.totalTx, pktLen)
-		// Update per-session and per-addr tx counters.
-		s.sessionsLock.RLock()
-		if sess, ok := s.sessions[clientID]; ok {
-			atomic.AddUint64(&sess.TxBytes, pktLen)
-			if ai, ok := sess.Addrs[addr.String()]; ok {
-				atomic.AddUint64(&ai.TxBytes, pktLen)
-			}
-		}
-		s.sessionsLock.RUnlock()
+		atomic.AddUint64(&session.TxBytes, pktLen)
 	}
 }
 
