@@ -116,8 +116,17 @@ func (c *Client) Run(ctx context.Context) error {
 	cc := c.cfg.Client
 
 	// --- socket setup ---
-	if cc.BindInterface != "" {
-		// Single NIC mode (Windows GUI, etc.)
+	if cc.BindInterface == "auto" {
+		// Auto mode: unbound socket, OS picks the route. Used on Windows.
+		conn, err := net.ListenUDP("udp", nil)
+		if err != nil {
+			return fmt.Errorf("client: listen UDP: %w", err)
+		}
+		c.conn = conn
+		defer conn.Close()
+		log.Info("client: single socket mode (auto)")
+	} else if cc.BindInterface != "" {
+		// Explicit NIC binding.
 		localAddr, err := resolveInterfaceAddr(cc.BindInterface)
 		if err != nil {
 			return fmt.Errorf("client: bind interface %q: %w", cc.BindInterface, err)

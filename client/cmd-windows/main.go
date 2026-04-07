@@ -83,6 +83,8 @@ func main() {
 	}
 
 	cfg.Mode = "client"
+	// Windows: single socket mode, no multipath. OS routing picks the right NIC.
+	cfg.Client.BindInterface = "auto"
 	fmt.Println("  Connecting...")
 	fmt.Println()
 
