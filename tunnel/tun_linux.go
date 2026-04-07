@@ -62,7 +62,7 @@ func createPlatformTUN(cfg Config) (Device, error) {
 			return nil, fmt.Errorf("ip addr add: %s: %w", out, err)
 		}
 	}
-	if out, err := exec.Command("ip", "link", "set", devName, "mtu", fmt.Sprint(cfg.MTU), "txqueuelen", "20").CombinedOutput(); err != nil {
+	if out, err := exec.Command("ip", "link", "set", devName, "mtu", fmt.Sprint(cfg.MTU)).CombinedOutput(); err != nil {
 		dev.Close()
 		return nil, fmt.Errorf("ip link set mtu: %s: %w", out, err)
 	}
