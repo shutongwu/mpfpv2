@@ -22,12 +22,12 @@ const (
 const (
 	rttWindowSize      = 10
 	missThresholdDown  = 5
-	recvChanSize       = 256
+	recvChanSize       = 1024
 	recvBufSize        = 65535
 	pollInterval       = 200 * time.Millisecond
-	pathStaleTimeout   = 5 * time.Second
+	pathStaleTimeout   = 8 * time.Second
 	recycleMinInterval = 10 * time.Second
-	recycleMaxAttempts = 3
+	recycleMaxAttempts = 2
 	recycleBackoff     = 60 * time.Second
 )
 
@@ -391,6 +391,8 @@ func (m *MultiPath) centralRecvLoop() {
 		case m.recvCh <- RecvPacket{Data: data, FromPath: "central", Addr: addr}:
 		case <-m.stopCh:
 			return
+		default:
+			protocol.PutBuf(data)
 		}
 	}
 }
@@ -422,6 +424,8 @@ func (m *MultiPath) perPathRecvLoop(p *Path) {
 		case m.recvCh <- RecvPacket{Data: data, FromPath: p.IfaceName, Addr: addr}:
 		case <-m.stopCh:
 			return
+		default:
+			protocol.PutBuf(data)
 		}
 	}
 }
