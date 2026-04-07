@@ -22,7 +22,7 @@ const (
 const (
 	rttWindowSize      = 10
 	missThresholdDown  = 5
-	recvChanSize       = 1024
+	recvChanSize       = 64 // ~90ms at 700pps — prefer drop over delay
 	recvBufSize        = 65535
 	pollInterval       = 200 * time.Millisecond
 	pathStaleTimeout   = 8 * time.Second

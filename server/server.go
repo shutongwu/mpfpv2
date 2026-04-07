@@ -153,6 +153,9 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("server: listen: %w", err)
 	}
+	// Minimize buffers for FPV low-latency: drop stale packets rather than queue.
+	conn.SetReadBuffer(65536)  // 64KB ≈ 45 pkts — server handles many clients
+	conn.SetWriteBuffer(65536)
 	s.conn = conn
 	defer conn.Close()
 

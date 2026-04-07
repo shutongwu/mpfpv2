@@ -37,6 +37,12 @@ func createBoundUDPConn(localAddr net.IP, ifaceName string) (*net.UDPConn, error
 		}
 	}
 
+	// Minimize socket buffers for FPV low-latency: prefer dropping over queueing.
+	// 32KB ≈ 22 packets ≈ 60ms at 4Mbps — enough for scheduling jitter,
+	// small enough that stale packets don't accumulate.
+	syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_SNDBUF, 32768)
+	syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 32768)
+
 	var sa syscall.Sockaddr
 	if isIPv6 {
 		lsa := syscall.SockaddrInet6{Port: 0}
