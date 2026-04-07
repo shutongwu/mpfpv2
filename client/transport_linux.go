@@ -9,8 +9,9 @@ import (
 	"syscall"
 )
 
-// createBoundUDPConn creates a UDP socket bound to a specific NIC via
-// SO_BINDTODEVICE. Also sets SO_REUSEADDR and SO_SNDTIMEO(50ms).
+// createBoundUDPConn creates a non-blocking UDP socket bound to a specific NIC
+// via SO_BINDTODEVICE. Non-blocking send means WriteToUDP returns immediately
+// with EAGAIN if the kernel buffer is full, instead of blocking.
 func createBoundUDPConn(localAddr net.IP, ifaceName string) (*net.UDPConn, error) {
 	isIPv6 := localAddr.To4() == nil
 	af := syscall.AF_INET
@@ -18,7 +19,7 @@ func createBoundUDPConn(localAddr net.IP, ifaceName string) (*net.UDPConn, error
 		af = syscall.AF_INET6
 	}
 
-	s, err := syscall.Socket(af, syscall.SOCK_DGRAM, syscall.IPPROTO_UDP)
+	s, err := syscall.Socket(af, syscall.SOCK_DGRAM|syscall.SOCK_NONBLOCK, syscall.IPPROTO_UDP)
 	if err != nil {
 		return nil, fmt.Errorf("socket (iface=%s): %w", ifaceName, err)
 	}
@@ -33,13 +34,6 @@ func createBoundUDPConn(localAddr net.IP, ifaceName string) (*net.UDPConn, error
 			syscall.Close(s)
 			return nil, fmt.Errorf("SO_BINDTODEVICE (iface=%s): %w", ifaceName, err)
 		}
-	}
-
-	// 50ms send timeout prevents blocking on dead NICs.
-	tv := syscall.Timeval{Sec: 0, Usec: 50000}
-	if err := syscall.SetsockoptTimeval(s, syscall.SOL_SOCKET, syscall.SO_SNDTIMEO, &tv); err != nil {
-		syscall.Close(s)
-		return nil, fmt.Errorf("SO_SNDTIMEO (iface=%s): %w", ifaceName, err)
 	}
 
 	var sa syscall.Sockaddr
