@@ -9,9 +9,10 @@ import (
 	"syscall"
 )
 
-// createBoundUDPConn creates a non-blocking UDP socket bound to a specific NIC
-// via SO_BINDTODEVICE. Non-blocking send means WriteToUDP returns immediately
-// with EAGAIN if the kernel buffer is full, instead of blocking.
+// createBoundUDPConn creates a UDP socket bound to a specific NIC via
+// SO_BINDTODEVICE. Go's runtime netpoller manages the fd as non-blocking
+// internally — short buffer-full conditions are retried automatically,
+// while real errors (ENETUNREACH) are returned immediately.
 func createBoundUDPConn(localAddr net.IP, ifaceName string) (*net.UDPConn, error) {
 	isIPv6 := localAddr.To4() == nil
 	af := syscall.AF_INET
