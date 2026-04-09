@@ -73,11 +73,12 @@ type Server struct {
 	prefixLen       uint8
 
 	// IP auto-allocation.
-	ipPool     map[uint16]net.IP
-	ipPoolNames map[uint16]string
-	subnet     *net.IPNet
-	ipPoolFile string
-	ipPoolLock sync.Mutex
+	ipPool        map[uint16]net.IP
+	ipPoolNames   map[uint16]string
+	ipPoolExpiry  map[uint16]time.Time // orphaned pool entries awaiting cleanup
+	subnet        *net.IPNet
+	ipPoolFile    string
+	ipPoolLock    sync.Mutex
 
 	// Config file path for saving changes via Web UI.
 	cfgPath string
@@ -88,8 +89,9 @@ type Server struct {
 	totalTx uint64
 
 	// Timeouts.
-	clientTimeout time.Duration
-	addrTimeout   time.Duration
+	clientTimeout    time.Duration
+	addrTimeout      time.Duration
+	ipPoolRetention  time.Duration // how long orphaned ipPool entries are kept
 }
 
 // New creates and initialises a Server from the given configuration.
@@ -106,9 +108,11 @@ func New(cfg *config.Config) (*Server, error) {
 		teamKeyHash:   protocol.TeamKeyHash(cfg.TeamKey),
 		clientTimeout: time.Duration(cfg.Server.ClientTimeout) * time.Second,
 		addrTimeout:   time.Duration(cfg.Server.AddrTimeout) * time.Second,
-		ipPool:        make(map[uint16]net.IP),
-		ipPoolNames:   make(map[uint16]string),
-		ipPoolFile:    cfg.Server.IPPoolFile,
+		ipPool:          make(map[uint16]net.IP),
+		ipPoolNames:     make(map[uint16]string),
+		ipPoolExpiry:    make(map[uint16]time.Time),
+		ipPoolFile:      cfg.Server.IPPoolFile,
+		ipPoolRetention: 5 * time.Minute,
 	}
 
 	// Parse server virtual IP.
@@ -343,6 +347,41 @@ func (s *Server) handleHeartbeat(hdr protocol.Header, payload []byte, from *net.
 		// New client — allocate IP if needed.
 		assignedIP := vip
 		assignedPrefix := hb.PrefixLen
+
+		if !assignedIP.Equal(net.IPv4zero) {
+			// Validate client-requested IP: must not conflict with server or other clients.
+			conflict := false
+			var reqKey [4]byte
+			copy(reqKey[:], assignedIP.To4())
+			if reqKey == s.serverVirtualIP {
+				conflict = true
+			}
+			if !conflict {
+				for cid, sess := range s.sessions {
+					if cid != clientID && sess.VirtualIP.Equal(assignedIP) {
+						conflict = true
+						break
+					}
+				}
+			}
+			// Also check ipPool for IPs owned by other clientIDs (e.g. timed-out
+			// sessions still in the deferred-cleanup grace period).
+			if !conflict {
+				s.ipPoolLock.Lock()
+				for cid, poolIP := range s.ipPool {
+					if cid != clientID && poolIP.Equal(assignedIP) {
+						conflict = true
+						break
+					}
+				}
+				s.ipPoolLock.Unlock()
+			}
+			if conflict {
+				log.Warnf("server: clientID=%d requested IP %s conflicts, re-allocating", clientID, assignedIP)
+				assignedIP = net.IPv4zero // force pool allocation below
+			}
+		}
+
 		if assignedIP.Equal(net.IPv4zero) {
 			allocated, allocPrefix := s.allocateIP(clientID, hb.DeviceName)
 			if allocated != nil {
@@ -583,8 +622,9 @@ func (s *Server) allocateIP(clientID uint16, deviceName string) (net.IP, uint8) 
 		s.ipPoolNames[clientID] = deviceName
 	}
 
-	// Return existing allocation.
+	// Return existing allocation and cancel any pending expiry.
 	if ip, ok := s.ipPool[clientID]; ok {
+		delete(s.ipPoolExpiry, clientID)
 		if deviceName != "" {
 			s.saveIPPool()
 		}
@@ -739,12 +779,30 @@ func (s *Server) cleanup() {
 			s.routeLock.Unlock()
 		}
 		s.dedup.Reset(sr.clientID)
-		// Clean ipPool to prevent unbounded growth.
+		// Mark ipPool entry for deferred cleanup instead of immediate deletion,
+		// so brief disconnects don't lose the IP mapping.
 		s.ipPoolLock.Lock()
-		delete(s.ipPool, sr.clientID)
-		delete(s.ipPoolNames, sr.clientID)
-		s.saveIPPool()
+		if _, ok := s.ipPool[sr.clientID]; ok {
+			s.ipPoolExpiry[sr.clientID] = now
+		}
 		s.ipPoolLock.Unlock()
-		log.Infof("server: clientID=%d session timed out, removed from IP pool", sr.clientID)
+		log.Infof("server: clientID=%d session timed out, IP pool entry marked for deferred cleanup", sr.clientID)
 	}
+
+	// Expire orphaned ipPool entries that have exceeded the retention period.
+	s.ipPoolLock.Lock()
+	changed := false
+	for cid, expAt := range s.ipPoolExpiry {
+		if now.Sub(expAt) > s.ipPoolRetention {
+			delete(s.ipPool, cid)
+			delete(s.ipPoolNames, cid)
+			delete(s.ipPoolExpiry, cid)
+			changed = true
+			log.Infof("server: clientID=%d IP pool entry expired after retention", cid)
+		}
+	}
+	if changed {
+		s.saveIPPool()
+	}
+	s.ipPoolLock.Unlock()
 }
