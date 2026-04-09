@@ -383,7 +383,16 @@ func (s *Server) handleHeartbeat(hdr protocol.Header, payload []byte, from *net.
 		}
 
 		if assignedIP.Equal(net.IPv4zero) {
-			allocated, allocPrefix := s.allocateIP(clientID, hb.DeviceName)
+			// Build set of IPs held by active sessions (sessionsLock is already held).
+			sessionIPs := make(map[[4]byte]bool, len(s.sessions))
+			for _, sess := range s.sessions {
+				if ip4 := sess.VirtualIP.To4(); ip4 != nil {
+					var k [4]byte
+					copy(k[:], ip4)
+					sessionIPs[k] = true
+				}
+			}
+			allocated, allocPrefix := s.allocateIP(clientID, hb.DeviceName, sessionIPs)
 			if allocated != nil {
 				assignedIP = allocated
 				assignedPrefix = allocPrefix
@@ -411,8 +420,9 @@ func (s *Server) handleHeartbeat(hdr protocol.Header, payload []byte, from *net.
 			s.routeTable[key] = clientID
 			s.routeLock.Unlock()
 
-			// Persist if not already in pool.
+			// Persist if not already in pool, and cancel any pending expiry.
 			s.ipPoolLock.Lock()
+			delete(s.ipPoolExpiry, clientID)
 			if _, pooled := s.ipPool[clientID]; !pooled {
 				s.ipPool[clientID] = assignedIP
 				if hb.DeviceName != "" {
@@ -614,7 +624,8 @@ func (s *Server) sendHeartbeatAck(to *net.UDPAddr, clientID uint16, assignedIP n
 // allocateIP assigns a virtual IP to the given clientID from the subnet pool.
 // Returns the existing allocation if one exists.
 // Must NOT be called with ipPoolLock held.
-func (s *Server) allocateIP(clientID uint16, deviceName string) (net.IP, uint8) {
+// sessionIPs contains IPs held by active sessions (caller builds this under sessionsLock).
+func (s *Server) allocateIP(clientID uint16, deviceName string, sessionIPs map[[4]byte]bool) (net.IP, uint8) {
 	s.ipPoolLock.Lock()
 	defer s.ipPoolLock.Unlock()
 
@@ -635,12 +646,15 @@ func (s *Server) allocateIP(clientID uint16, deviceName string) (net.IP, uint8) 
 		return nil, 0
 	}
 
-	// Build set of used IPs.
-	used := make(map[[4]byte]bool, len(s.ipPool)+1)
+	// Build set of used IPs from pool, active sessions, and server IP.
+	used := make(map[[4]byte]bool, len(s.ipPool)+len(sessionIPs)+1)
 	for _, ip := range s.ipPool {
 		var key [4]byte
 		copy(key[:], ip.To4())
 		used[key] = true
+	}
+	for k := range sessionIPs {
+		used[k] = true
 	}
 	used[s.serverVirtualIP] = true
 
