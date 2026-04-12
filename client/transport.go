@@ -166,7 +166,7 @@ func (m *MultiPath) Stop() {
 }
 
 // Send sends data redundantly through all Active paths.
-// Probing and Down paths are skipped.
+// Probing paths are skipped (not yet registered with server).
 func (m *MultiPath) Send(data []byte) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -240,6 +240,8 @@ func (m *MultiPath) SendAllHeartbeat(baseBuf []byte) error {
 		pkt[off+2] = byte(rxBytes >> 8)
 		pkt[off+3] = byte(rxBytes)
 
+		// Set own deadline — Send() may have left a stale 1ms deadline on this socket.
+		p.Conn.SetWriteDeadline(time.Now().Add(50 * time.Millisecond))
 		if _, err := p.Conn.WriteToUDP(pkt[:pktLen], m.serverAddr); err != nil {
 			p.mu.Lock()
 			p.Status = PathSuspect
