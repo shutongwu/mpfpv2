@@ -37,11 +37,12 @@ func createBoundUDPConn(localAddr net.IP, ifaceName string) (*net.UDPConn, error
 		}
 	}
 
-	// FPV low-latency: smaller than default (212KB) to limit stale-packet accumulation,
-	// but large enough to absorb WiFi/4G jitter (50-100ms bursts).
-	// 128KB ≈ 90 packets ≈ 250ms at 4Mbps.
-	syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_SNDBUF, 131072)
-	syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 131072)
+	// FPV low-latency: keep buffers small to limit stale-packet accumulation.
+	// 32KB SO_SNDBUF (kernel doubles to ~64KB) absorbs I-frame bursts (~30-50KB)
+	// while limiting stale data to ~40ms at 12Mbps.
+	// SO_RCVBUF slightly larger to tolerate scheduling jitter on receive side.
+	syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_SNDBUF, 32768)
+	syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 65536)
 
 	var sa syscall.Sockaddr
 	if isIPv6 {

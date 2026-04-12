@@ -16,19 +16,16 @@ const (
 	PathProbing = iota // newly discovered, awaiting first heartbeat ack
 	PathActive         // confirmed via ack, used for data
 	PathSuspect        // send error occurred
-	PathDown           // consecutive 5 heartbeat misses
 )
 
 const (
 	rttWindowSize      = 10
-	missThresholdDown  = 5
 	recvChanSize       = 256 // ~360ms at 700pps, with default drop on full
 	recvBufSize        = 65535
 	pollInterval       = 200 * time.Millisecond
 	pathStaleTimeout   = 8 * time.Second
 	recycleMinInterval = 10 * time.Second
-	recycleMaxAttempts = 2
-	recycleBackoff     = 60 * time.Second
+	sendWriteTimeout   = 1 * time.Millisecond
 )
 
 // PathStatus is the health state of a network path.
@@ -42,8 +39,6 @@ func (s PathStatus) String() string {
 		return "active"
 	case PathSuspect:
 		return "suspect"
-	case PathDown:
-		return "down"
 	default:
 		return "unknown"
 	}
@@ -185,13 +180,13 @@ func (m *MultiPath) Send(data []byte) error {
 		p.mu.Lock()
 		st := p.Status
 		p.mu.Unlock()
-		if st != PathActive {
+		if st == PathProbing {
 			continue
 		}
+		// 1ms write deadline: if kernel buffer is full (modem stalled),
+		// fail fast instead of blocking the TUN read loop.
+		p.Conn.SetWriteDeadline(time.Now().Add(sendWriteTimeout))
 		if _, err := p.Conn.WriteToUDP(data, m.serverAddr); err != nil {
-			p.mu.Lock()
-			p.Status = PathSuspect
-			p.mu.Unlock()
 			continue
 		}
 		p.mu.Lock()
@@ -205,7 +200,7 @@ func (m *MultiPath) Send(data []byte) error {
 	return nil
 }
 
-// SendAllHeartbeat sends a heartbeat through all non-Down paths (including Probing),
+// SendAllHeartbeat sends a heartbeat through all paths (including Probing and Suspect),
 // appending per-path data to each copy.
 func (m *MultiPath) SendAllHeartbeat(baseBuf []byte) error {
 	m.mu.RLock()
@@ -214,15 +209,10 @@ func (m *MultiPath) SendAllHeartbeat(baseBuf []byte) error {
 	var lastErr error
 	for _, p := range m.paths {
 		p.mu.Lock()
-		st := p.Status
 		rttMs := uint16(p.RTT.Milliseconds())
 		txBytes := uint32(p.TxBytes)
 		rxBytes := uint32(p.RxBytes)
 		p.mu.Unlock()
-
-		if st == PathDown {
-			continue
-		}
 
 		// Append: \x00 [nameLen] [name] [rtt 2B] [tx 4B] [rx 4B]
 		nameBytes := []byte(p.IfaceName)
@@ -330,32 +320,18 @@ func (m *MultiPath) GetPaths() []PathInfo {
 }
 
 // CheckAndRecycleStalePaths detects paths with stale NAT and recreates sockets.
+// Paths are never abandoned — they keep recycling indefinitely.
 func (m *MultiPath) CheckAndRecycleStalePaths() {
 	m.mu.RLock()
 	var stale []string
 	now := time.Now()
 	for name, p := range m.paths {
 		p.mu.Lock()
-		st := p.Status
 		lr := p.LastRecv
 		lrc := p.lastRecycled
-		rc := p.recycleCount
 		p.mu.Unlock()
 
-		if st == PathDown {
-			if rc >= recycleMaxAttempts && now.Sub(lrc) > recycleBackoff {
-				stale = append(stale, name)
-			}
-			continue
-		}
 		if now.Sub(lr) <= pathStaleTimeout {
-			continue
-		}
-		if rc >= recycleMaxAttempts {
-			p.mu.Lock()
-			p.Status = PathDown
-			p.mu.Unlock()
-			log.WithField("iface", name).Warn("path down after max recycle attempts")
 			continue
 		}
 		if !lrc.IsZero() && now.Sub(lrc) <= recycleMinInterval {
@@ -514,10 +490,10 @@ func (m *MultiPath) recyclePath(name string) {
 	conn, err := createBoundUDPConn(p.LocalAddr, p.IfaceName)
 	if err != nil {
 		p.mu.Lock()
-		p.Status = PathDown
+		p.Status = PathSuspect
 		p.mu.Unlock()
 		m.mu.Unlock()
-		log.WithField("iface", name).WithError(err).Warn("recycle failed")
+		log.WithField("iface", name).WithError(err).Warn("recycle failed, will retry")
 		return
 	}
 

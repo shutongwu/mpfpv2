@@ -15,7 +15,8 @@ const (
 	ifnamsiz  = 16
 	iffTUN    = 0x0001
 	iffNOPI   = 0x1000
-	tunSetIff = 0x400454ca
+	tunSetIff      = 0x400454ca
+	siocsifTxqlen  = 0x8943
 )
 
 type ifReq struct {
@@ -70,7 +71,35 @@ func createPlatformTUN(cfg Config) (Device, error) {
 		dev.Close()
 		return nil, fmt.Errorf("ip link set up: %s: %w", out, err)
 	}
+
+	// Set txqueuelen=2 via ioctl (BusyBox ip doesn't support txqueuelen).
+	// Minimises TUN-level packet accumulation for low-latency FPV.
+	setTxQueueLen(devName, 2)
+
 	return dev, nil
+}
+
+// ifreqTxqlen matches Linux struct ifreq for SIOCSIFTXQLEN.
+// ifr_name (16 bytes) followed by ifr_ifru union where ifru_qlen is at offset 0.
+type ifreqTxqlen struct {
+	Name [ifnamsiz]byte
+	Qlen int32
+	_    [20]byte // pad union to full ifreq size (40 bytes total on 64-bit)
+}
+
+// setTxQueueLen sets the TX queue length on a network interface via ioctl.
+func setTxQueueLen(ifaceName string, qlen int) {
+	sock, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, 0)
+	if err != nil {
+		return
+	}
+	defer syscall.Close(sock)
+
+	var req ifreqTxqlen
+	copy(req.Name[:], ifaceName)
+	req.Qlen = int32(qlen)
+	// Best-effort: ignore errors (some kernels / containers may restrict this).
+	syscall.Syscall(syscall.SYS_IOCTL, uintptr(sock), uintptr(siocsifTxqlen), uintptr(unsafe.Pointer(&req)))
 }
 
 func (d *linuxTUN) Read(buf []byte) (int, error)  { return d.file.Read(buf) }
