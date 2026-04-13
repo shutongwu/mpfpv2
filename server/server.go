@@ -40,6 +40,8 @@ type Session struct {
 	PrefixLen  uint8
 	DeviceName string
 	Addrs      map[string]*AddrInfo // key = addr.String()
+	NICMapping map[uint8]string     // NIC-ID → NIC name from heartbeat
+	MaxSeq     uint32               // highest seq seen (for stale filter)
 	LastSeen   time.Time
 	RxBytes    uint64
 	TxBytes    uint64
@@ -408,6 +410,7 @@ func (s *Server) handleHeartbeat(hdr protocol.Header, payload []byte, from *net.
 			PrefixLen:  assignedPrefix,
 			DeviceName: hb.DeviceName,
 			Addrs:      make(map[string]*AddrInfo),
+			NICMapping: make(map[uint8]string),
 			LastSeen:   now,
 		}
 		s.sessions[clientID] = session
@@ -453,24 +456,40 @@ func (s *Server) handleHeartbeat(hdr protocol.Header, payload []byte, from *net.
 	}
 	ai.LastSeen = now
 
-	// Store per-NIC data from heartbeat extension.
+	// Store NIC-ID mapping and per-NIC stats from heartbeat extension.
 	if len(hb.PathRTTs) > 0 {
-		p := hb.PathRTTs[0]
-		// Remove stale addrs with the same NIC name (port changed after reconnect).
-		if p.Name != "" {
+		// Update NIC-ID → name mapping.
+		if session.NICMapping == nil {
+			session.NICMapping = make(map[uint8]string, len(hb.PathRTTs))
+		}
+		for _, p := range hb.PathRTTs {
+			if p.Name != "" {
+				session.NICMapping[p.NICID] = p.Name
+			}
+		}
+		// Use the sending NIC's stats for this address entry.
+		nicName := session.NICMapping[hdr.NICID]
+		if nicName != "" {
+			// Remove stale addrs with the same NIC name (port changed after reconnect).
 			for oldKey, oldAI := range session.Addrs {
-				if oldKey != addrKey && oldAI.NICName == p.Name {
+				if oldKey != addrKey && oldAI.NICName == nicName {
 					delete(session.Addrs, oldKey)
 					if log.IsLevelEnabled(log.DebugLevel) {
-						log.Debugf("server: clientID=%d removed stale addr %s for NIC %s", clientID, oldKey, p.Name)
+						log.Debugf("server: clientID=%d removed stale addr %s for NIC %s", clientID, oldKey, nicName)
 					}
 				}
 			}
+			ai.NICName = nicName
 		}
-		ai.NICName = p.Name
-		ai.NICRTTms = p.RTTms
-		ai.NICTxBytes = p.TxBytes
-		ai.NICRxBytes = p.RxBytes
+		// Find stats for the sending NIC.
+		for _, p := range hb.PathRTTs {
+			if p.NICID == hdr.NICID {
+				ai.NICRTTms = p.RTTms
+				ai.NICTxBytes = p.TxBytes
+				ai.NICRxBytes = p.RxBytes
+				break
+			}
+		}
 	}
 
 	ackVIP := session.VirtualIP
@@ -520,6 +539,26 @@ func (s *Server) handleData(hdr protocol.Header, payload []byte, from *net.UDPAd
 			log.Debugf("server: inner srcIP mismatch for clientID=%d, dropping", clientID)
 		}
 		return
+	}
+
+	// Stale packet filter: drop packets that are too far behind the newest seq.
+	// With timestamp-based seq, the age is directly in milliseconds.
+	// MaxSeq=0 means uninitialized (ms timestamps are never 0 in practice).
+	maxSeq := atomic.LoadUint32(&session.MaxSeq)
+	if maxSeq == 0 {
+		// First data packet: initialize MaxSeq, skip stale check.
+		atomic.CompareAndSwapUint32(&session.MaxSeq, 0, hdr.Seq)
+	} else if protocol.SeqIsNewer(hdr.Seq, maxSeq) {
+		atomic.CompareAndSwapUint32(&session.MaxSeq, maxSeq, hdr.Seq)
+	} else if hdr.Seq != maxSeq {
+		age := maxSeq - hdr.Seq
+		if age > protocol.StaleThresholdMs {
+			s.sessionsLock.RUnlock()
+			if log.IsLevelEnabled(log.DebugLevel) {
+				log.Debugf("server: stale drop clientID=%d seq=%d age=%dms", clientID, hdr.Seq, age)
+			}
+			return
+		}
 	}
 
 	// Update addr LastSeen.

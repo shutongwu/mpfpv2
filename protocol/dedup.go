@@ -83,13 +83,9 @@ func (d *Deduplicator) IsDuplicate(clientID uint16, seq uint32) bool {
 
 	behind := -diff
 	if behind >= int64(d.windowSize) {
-		// Sender restart: reset and accept.
-		for i := range cs.bitmap {
-			cs.bitmap[i] = 0
-		}
-		cs.maxSeq = seq
-		cs.setBit(seq, d.windowSize)
-		return false
+		// With timestamp-based seq, far-behind packets are stale, not sender restarts.
+		// Sender restarts produce a forward jump (new current time), handled by diff > 0 above.
+		return true
 	}
 
 	if cs.getBit(seq, d.windowSize) {

@@ -143,7 +143,7 @@ func (c *Client) Run(ctx context.Context) error {
 		}).Info("client: single NIC mode")
 	} else if c.serverAddr != nil && !c.serverAddr.IP.IsLoopback() {
 		// Multi-path mode.
-		mp, err := NewMultiPath(c.serverAddr, nil)
+		mp, err := NewMultiPath(c.serverAddr, nil, c.dedup)
 		if err == nil {
 			if startErr := mp.Start(); startErr == nil {
 				c.multipath = mp
@@ -270,7 +270,7 @@ func (c *Client) tunReadLoop(ctx context.Context) {
 		}
 
 		// Encode header.
-		seq := c.seq.Add(1) - 1
+		seq := c.nextSeq()
 		hdr := &protocol.Header{
 			Type:     protocol.TypeData,
 			ClientID: c.clientID,
@@ -339,7 +339,7 @@ func (c *Client) sendHeartbeat() error {
 	// Allocate buffer: header + heartbeat + deviceName + path data margin.
 	buf := make([]byte, protocol.HeaderSize+protocol.HeartbeatPayloadMin+len(c.deviceName)+256)
 
-	seq := c.seq.Add(1) - 1
+	seq := c.nextSeq()
 	protocol.EncodeHeader(buf, &protocol.Header{
 		Type:     protocol.TypeHeartbeat,
 		ClientID: c.clientID,
@@ -578,4 +578,21 @@ func (c *Client) VirtualIP() string {
 		return ""
 	}
 	return vip.String()
+}
+
+// nextSeq returns a monotonically increasing millisecond timestamp for use as Seq.
+// During bursts (multiple packets per ms), it increments past the current ms.
+// After the burst, it re-syncs to real time.
+func (c *Client) nextSeq() uint32 {
+	now := uint32(time.Now().UnixMilli())
+	for {
+		old := c.seq.Load()
+		next := now
+		if next <= old {
+			next = old + 1
+		}
+		if c.seq.CompareAndSwap(old, next) {
+			return next
+		}
+	}
 }

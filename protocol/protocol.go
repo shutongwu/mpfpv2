@@ -25,8 +25,9 @@ const (
 	AckStatusBadTeamKey   = 0x01
 	AckStatusIDConflict   = 0x02
 
-	DefaultDedupWindow = 4096
+	DefaultDedupWindow = 65536
 	MTU                = 1400 // fixed TUN MTU for all nodes
+	StaleThresholdMs   = 200  // server drops packets older than this (ms)
 )
 
 var (
@@ -37,18 +38,19 @@ var (
 // Header is the 8-byte per-packet encapsulation.
 //
 //	Byte 0:   Version(4 high) | Type(4 low)
-//	Byte 1:   Reserved
+//	Byte 1:   NIC-ID (sender's network interface index)
 //	Byte 2-3: ClientID  (big-endian uint16)
-//	Byte 4-7: Seq       (big-endian uint32)
+//	Byte 4-7: Seq       (big-endian uint32, millisecond timestamp)
 type Header struct {
 	Type     uint8
+	NICID    uint8
 	ClientID uint16
 	Seq      uint32
 }
 
 func EncodeHeader(buf []byte, h *Header) {
 	buf[0] = Version1 | (h.Type & 0x0F)
-	buf[1] = 0
+	buf[1] = h.NICID
 	binary.BigEndian.PutUint16(buf[2:4], h.ClientID)
 	binary.BigEndian.PutUint32(buf[4:8], h.Seq)
 }
@@ -62,6 +64,7 @@ func DecodeHeader(buf []byte) (Header, error) {
 	}
 	return Header{
 		Type:     buf[0] & 0x0F,
+		NICID:    buf[1],
 		ClientID: binary.BigEndian.Uint16(buf[2:4]),
 		Seq:      binary.BigEndian.Uint32(buf[4:8]),
 	}, nil
@@ -69,6 +72,7 @@ func DecodeHeader(buf []byte) (Header, error) {
 
 // PathRTT holds per-NIC stats reported by the client inside a heartbeat.
 type PathRTT struct {
+	NICID   uint8
 	Name    string
 	RTTms   uint16
 	TxBytes uint64
@@ -136,21 +140,32 @@ func DecodeHeartbeat(buf []byte) (Heartbeat, error) {
 		return hb, nil
 	}
 	hb.DeviceName = string(ext[:sep])
-	// Parse per-path data: [nameLen 1B] [name] [rtt 2B] [tx 4B] [rx 4B]
+	// v2.2 multi-path format: [pathCount 1B] [nicID 1B nameLen 1B name rtt 2B tx 4B rx 4B] × N
 	d := ext[sep+1:]
-	if len(d) >= 1 {
-		nameLen := int(d[0])
-		pos := 1
-		if pos+nameLen+10 <= len(d) {
-			name := string(d[pos : pos+nameLen])
-			pos += nameLen
-			rtt := uint16(d[pos])<<8 | uint16(d[pos+1])
-			pos += 2
-			tx := uint64(binary.BigEndian.Uint32(d[pos:]))
-			pos += 4
-			rx := uint64(binary.BigEndian.Uint32(d[pos:]))
-			hb.PathRTTs = append(hb.PathRTTs, PathRTT{Name: name, RTTms: rtt, TxBytes: tx, RxBytes: rx})
+	if len(d) < 1 {
+		return hb, nil
+	}
+	pathCount := int(d[0])
+	pos := 1
+	for i := 0; i < pathCount; i++ {
+		if pos+2 > len(d) {
+			break
 		}
+		nicID := d[pos]
+		nameLen := int(d[pos+1])
+		pos += 2
+		if pos+nameLen+10 > len(d) {
+			break
+		}
+		name := string(d[pos : pos+nameLen])
+		pos += nameLen
+		rtt := uint16(d[pos])<<8 | uint16(d[pos+1])
+		pos += 2
+		tx := uint64(binary.BigEndian.Uint32(d[pos:]))
+		pos += 4
+		rx := uint64(binary.BigEndian.Uint32(d[pos:]))
+		pos += 4
+		hb.PathRTTs = append(hb.PathRTTs, PathRTT{NICID: nicID, Name: name, RTTms: rtt, TxBytes: tx, RxBytes: rx})
 	}
 	return hb, nil
 }
@@ -185,6 +200,37 @@ func DecodeHeartbeatAck(buf []byte) (HeartbeatAck, error) {
 		Status:     buf[5],
 		MTU:        uint16(buf[6])<<8 | uint16(buf[7]),
 	}, nil
+}
+
+// EncodePathExtension encodes multi-path NIC stats into buf.
+// Format: [pathCount 1B] [nicID 1B nameLen 1B name rtt 2B tx 4B rx 4B] × N
+// Returns bytes written.
+func EncodePathExtension(buf []byte, paths []PathRTT) int {
+	if len(paths) == 0 {
+		return 0
+	}
+	buf[0] = byte(len(paths))
+	pos := 1
+	for _, p := range paths {
+		nameBytes := []byte(p.Name)
+		buf[pos] = p.NICID
+		buf[pos+1] = byte(len(nameBytes))
+		pos += 2
+		pos += copy(buf[pos:], nameBytes)
+		buf[pos] = byte(p.RTTms >> 8)
+		buf[pos+1] = byte(p.RTTms)
+		pos += 2
+		binary.BigEndian.PutUint32(buf[pos:], uint32(p.TxBytes))
+		pos += 4
+		binary.BigEndian.PutUint32(buf[pos:], uint32(p.RxBytes))
+		pos += 4
+	}
+	return pos
+}
+
+// SeqIsNewer returns true if seq is ahead of ref (handles uint32 wraparound).
+func SeqIsNewer(seq, ref uint32) bool {
+	return int32(seq-ref) > 0
 }
 
 // TeamKeyHash returns the first 8 bytes of SHA-256(key).

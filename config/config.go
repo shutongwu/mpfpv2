@@ -64,7 +64,7 @@ func FromConnString(s string) (*Config, error) {
 		TeamKey: teamKey,
 		Client: &ClientConfig{
 			ServerAddr:  serverAddr,
-			DedupWindow: 4096,
+			DedupWindow: 65536,
 		},
 	}
 	return cfg, nil
@@ -100,7 +100,7 @@ func parseConnString(s string) (teamKey, serverAddr string, err error) {
 func applyDefaults(cfg *Config) {
 	if cfg.Client != nil {
 		if cfg.Client.DedupWindow <= 0 {
-			cfg.Client.DedupWindow = 4096
+			cfg.Client.DedupWindow = 65536
 		}
 	}
 	if cfg.Server != nil {
@@ -111,7 +111,7 @@ func applyDefaults(cfg *Config) {
 			cfg.Server.AddrTimeout = 15
 		}
 		if cfg.Server.DedupWindow <= 0 {
-			cfg.Server.DedupWindow = 4096
+			cfg.Server.DedupWindow = 65536
 		}
 		if cfg.Server.IPPoolFile == "" {
 			cfg.Server.IPPoolFile = "ip_pool.json"

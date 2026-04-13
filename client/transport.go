@@ -20,12 +20,12 @@ const (
 
 const (
 	rttWindowSize      = 10
-	recvChanSize       = 256 // ~360ms at 700pps, with default drop on full
+	recvChanSize       = 256 // ~365ms at 700pps, with default drop on full
 	recvBufSize        = 65535
+	sendChanSize       = 64 // per-NIC send buffer: ~90ms at 700pps
 	pollInterval       = 200 * time.Millisecond
 	pathStaleTimeout   = 8 * time.Second
 	recycleMinInterval = 10 * time.Second
-	sendWriteTimeout   = 1 * time.Millisecond
 )
 
 // PathStatus is the health state of a network path.
@@ -48,12 +48,13 @@ func (s PathStatus) String() string {
 type Path struct {
 	IfaceName    string
 	LocalAddr    net.IP
+	NICID        uint8
 	Conn         *net.UDPConn
+	sendCh       chan []byte // per-NIC send channel
 	RTT          time.Duration
 	rttSamples   []time.Duration
 	LastRecv     time.Time
 	Status       PathStatus
-	missCount    int
 	TxBytes      uint64
 	RxBytes      uint64
 	lastRecycled time.Time
@@ -88,6 +89,8 @@ type MultiPath struct {
 	recvCh     chan RecvPacket
 	recvConn   *net.UDPConn // central unbound recv socket
 	recvPort   uint16
+	dedup      *protocol.Deduplicator // shared with client, for recv-side dedup
+	nextNICID  uint8
 	mu         sync.RWMutex
 	stopCh     chan struct{}
 	wg         sync.WaitGroup
@@ -95,7 +98,8 @@ type MultiPath struct {
 
 // NewMultiPath creates a multipath sender targeting serverAddr.
 // excluded is a list of interface names to skip.
-func NewMultiPath(serverAddr *net.UDPAddr, excluded []string) (*MultiPath, error) {
+// dedup is the client's deduplicator for recv-side early dedup.
+func NewMultiPath(serverAddr *net.UDPAddr, excluded []string, dedup *protocol.Deduplicator) (*MultiPath, error) {
 	if serverAddr == nil {
 		return nil, fmt.Errorf("transport: serverAddr must not be nil")
 	}
@@ -108,6 +112,7 @@ func NewMultiPath(serverAddr *net.UDPAddr, excluded []string) (*MultiPath, error
 		paths:      make(map[string]*Path),
 		excluded:   ex,
 		recvCh:     make(chan RecvPacket, recvChanSize),
+		dedup:      dedup,
 		stopCh:     make(chan struct{}),
 	}, nil
 }
@@ -154,6 +159,7 @@ func (m *MultiPath) Stop() {
 	m.mu.Lock()
 	for name, p := range m.paths {
 		close(p.closed)
+		close(p.sendCh)
 		p.Conn.Close()
 		delete(m.paths, name)
 	}
@@ -165,8 +171,9 @@ func (m *MultiPath) Stop() {
 	m.wg.Wait()
 }
 
-// Send sends data redundantly through all Active paths.
-// Probing paths are skipped (not yet registered with server).
+// Send dispatches data to all non-Probing paths via per-NIC goroutines.
+// Each path has an independent send goroutine — no path blocks another.
+// The NIC-ID is stamped into byte 1 of each copy.
 func (m *MultiPath) Send(data []byte) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -183,16 +190,15 @@ func (m *MultiPath) Send(data []byte) error {
 		if st == PathProbing {
 			continue
 		}
-		// 1ms write deadline: if kernel buffer is full (modem stalled),
-		// fail fast instead of blocking the TUN read loop.
-		p.Conn.SetWriteDeadline(time.Now().Add(sendWriteTimeout))
-		if _, err := p.Conn.WriteToUDP(data, m.serverAddr); err != nil {
-			continue
+		pkt := protocol.GetBuf(len(data))
+		copy(pkt, data)
+		pkt[1] = p.NICID // stamp NIC-ID into header byte 1
+		select {
+		case p.sendCh <- pkt:
+			sent++
+		default:
+			protocol.PutBuf(pkt) // channel full, drop
 		}
-		p.mu.Lock()
-		p.TxBytes += uint64(len(data))
-		p.mu.Unlock()
-		sent++
 	}
 	if sent == 0 {
 		return fmt.Errorf("transport: all paths failed or not active")
@@ -200,48 +206,39 @@ func (m *MultiPath) Send(data []byte) error {
 	return nil
 }
 
-// SendAllHeartbeat sends a heartbeat through all paths (including Probing and Suspect),
-// appending per-path data to each copy.
+// SendAllHeartbeat sends a heartbeat through all paths (including Probing and Suspect).
+// Each copy carries the full NIC-ID mapping table and all per-path stats.
 func (m *MultiPath) SendAllHeartbeat(baseBuf []byte) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var lastErr error
+	// Collect all path stats for the extension.
+	allPaths := make([]protocol.PathRTT, 0, len(m.paths))
 	for _, p := range m.paths {
 		p.mu.Lock()
-		rttMs := uint16(p.RTT.Milliseconds())
-		txBytes := uint32(p.TxBytes)
-		rxBytes := uint32(p.RxBytes)
+		allPaths = append(allPaths, protocol.PathRTT{
+			NICID:   p.NICID,
+			Name:    p.IfaceName,
+			RTTms:   uint16(p.RTT.Milliseconds()),
+			TxBytes: p.TxBytes,
+			RxBytes: p.RxBytes,
+		})
 		p.mu.Unlock()
+	}
 
-		// Append: \x00 [nameLen] [name] [rtt 2B] [tx 4B] [rx 4B]
-		nameBytes := []byte(p.IfaceName)
-		suffixLen := 1 + 1 + len(nameBytes) + 2 + 4 + 4
-		pktLen := len(baseBuf) + suffixLen
+	// Build extension: \x00 + multi-path data
+	extBuf := make([]byte, 1+1024) // generous margin
+	extBuf[0] = 0x00               // separator
+	extLen := 1 + protocol.EncodePathExtension(extBuf[1:], allPaths)
+
+	var lastErr error
+	for _, p := range m.paths {
+		pktLen := len(baseBuf) + extLen
 		pkt := protocol.GetBuf(pktLen)
 		copy(pkt, baseBuf)
+		pkt[1] = p.NICID // stamp NIC-ID into header byte 1
+		copy(pkt[len(baseBuf):], extBuf[:extLen])
 
-		off := len(baseBuf)
-		pkt[off] = 0x00 // separator
-		off++
-		pkt[off] = byte(len(nameBytes))
-		off++
-		off += copy(pkt[off:], nameBytes)
-		pkt[off] = byte(rttMs >> 8)
-		pkt[off+1] = byte(rttMs)
-		off += 2
-		pkt[off] = byte(txBytes >> 24)
-		pkt[off+1] = byte(txBytes >> 16)
-		pkt[off+2] = byte(txBytes >> 8)
-		pkt[off+3] = byte(txBytes)
-		off += 4
-		pkt[off] = byte(rxBytes >> 24)
-		pkt[off+1] = byte(rxBytes >> 16)
-		pkt[off+2] = byte(rxBytes >> 8)
-		pkt[off+3] = byte(rxBytes)
-
-		// Set own deadline — Send() may have left a stale 1ms deadline on this socket.
-		p.Conn.SetWriteDeadline(time.Now().Add(50 * time.Millisecond))
 		if _, err := p.Conn.WriteToUDP(pkt[:pktLen], m.serverAddr); err != nil {
 			p.mu.Lock()
 			p.Status = PathSuspect
@@ -286,7 +283,6 @@ func (m *MultiPath) UpdateRTT(ifaceName string, rtt time.Duration) {
 	}
 	p.RTT = averageDuration(p.rttSamples)
 	p.LastRecv = time.Now()
-	p.missCount = 0
 	p.recycleCount = 0
 
 	if p.Status == PathProbing {
@@ -365,6 +361,14 @@ func (m *MultiPath) centralRecvLoop() {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
+		// Dedup data packets before enqueueing to halve channel load.
+		if m.dedup != nil && n >= protocol.HeaderSize {
+			if hdr, err := protocol.DecodeHeader(buf[:n]); err == nil && hdr.Type == protocol.TypeData {
+				if m.dedup.IsDuplicate(hdr.ClientID, hdr.Seq) {
+					continue
+				}
+			}
+		}
 		data := protocol.GetBuf(n)
 		copy(data, buf[:n])
 		select {
@@ -398,6 +402,14 @@ func (m *MultiPath) perPathRecvLoop(p *Path) {
 		p.RxBytes += uint64(n)
 		p.mu.Unlock()
 
+		// Dedup data packets before enqueueing to halve channel load.
+		if m.dedup != nil && n >= protocol.HeaderSize {
+			if hdr, err := protocol.DecodeHeader(buf[:n]); err == nil && hdr.Type == protocol.TypeData {
+				if m.dedup.IsDuplicate(hdr.ClientID, hdr.Seq) {
+					continue
+				}
+			}
+		}
 		data := protocol.GetBuf(n)
 		copy(data, buf[:n])
 		select {
@@ -406,6 +418,30 @@ func (m *MultiPath) perPathRecvLoop(p *Path) {
 			return
 		default:
 			protocol.PutBuf(data)
+		}
+	}
+}
+
+// perPathSendLoop is the per-NIC independent send goroutine.
+// Each NIC blocks independently — no path can stall another.
+func (m *MultiPath) perPathSendLoop(p *Path) {
+	defer m.wg.Done()
+	for {
+		select {
+		case pkt, ok := <-p.sendCh:
+			if !ok {
+				return
+			}
+			if _, err := p.Conn.WriteToUDP(pkt, m.serverAddr); err == nil {
+				p.mu.Lock()
+				p.TxBytes += uint64(len(pkt))
+				p.mu.Unlock()
+			}
+			protocol.PutBuf(pkt)
+		case <-m.stopCh:
+			return
+		case <-p.closed:
+			return
 		}
 	}
 }
@@ -434,10 +470,15 @@ func (m *MultiPath) addPath(name string, info *ifaceInfo) {
 		return
 	}
 
+	nicID := m.nextNICID
+	m.nextNICID++
+
 	p := &Path{
 		IfaceName: name,
 		LocalAddr: localAddr,
+		NICID:     nicID,
 		Conn:      conn,
+		sendCh:    make(chan []byte, sendChanSize),
 		Status:    PathProbing,
 		LastRecv:  time.Now(),
 		closed:    make(chan struct{}),
@@ -450,11 +491,13 @@ func (m *MultiPath) addPath(name string, info *ifaceInfo) {
 	log.WithFields(log.Fields{
 		"iface":  name,
 		"addr":   localAddr,
+		"nicID":  nicID,
 		"status": "probing",
 	}).Info("path added")
 
-	m.wg.Add(1)
+	m.wg.Add(2)
 	go m.perPathRecvLoop(p)
+	go m.perPathSendLoop(p)
 }
 
 // removePath closes and removes the named path.
@@ -467,6 +510,7 @@ func (m *MultiPath) removePath(name string) {
 	}
 
 	close(p.closed)
+	close(p.sendCh)
 	p.Conn.Close()
 
 	m.mu.Lock()
@@ -487,13 +531,19 @@ func (m *MultiPath) recyclePath(name string) {
 
 	oldClosed := p.closed
 	close(oldClosed)
+	close(p.sendCh)
 	p.Conn.Close()
 
 	conn, err := createBoundUDPConn(p.LocalAddr, p.IfaceName)
 	if err != nil {
 		p.mu.Lock()
 		p.Status = PathSuspect
+		p.sendCh = make(chan []byte, sendChanSize) // reopen for future use
+		p.closed = make(chan struct{})
 		p.mu.Unlock()
+		m.wg.Add(2)
+		go m.perPathRecvLoop(p)
+		go m.perPathSendLoop(p)
 		m.mu.Unlock()
 		log.WithField("iface", name).WithError(err).Warn("recycle failed, will retry")
 		return
@@ -501,14 +551,16 @@ func (m *MultiPath) recyclePath(name string) {
 
 	p.mu.Lock()
 	p.Conn = conn
+	p.sendCh = make(chan []byte, sendChanSize)
 	p.closed = make(chan struct{})
 	p.Status = PathProbing
 	p.lastRecycled = time.Now()
 	p.recycleCount++
 	p.mu.Unlock()
 
-	m.wg.Add(1)
+	m.wg.Add(2)
 	go m.perPathRecvLoop(p)
+	go m.perPathSendLoop(p)
 
 	m.mu.Unlock()
 
